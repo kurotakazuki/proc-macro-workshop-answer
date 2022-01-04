@@ -1,8 +1,9 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, token::Comma, Data, DataStruct, DeriveInput, Field,
-    Fields, FieldsNamed,
+    parse_macro_input, punctuated::Punctuated, token::Comma, AngleBracketedGenericArguments, Data,
+    DataStruct, DeriveInput, Field, Fields, FieldsNamed, GenericArgument, Path, PathArguments,
+    PathSegment, Type, TypePath,
 };
 
 #[proc_macro_derive(Builder)]
@@ -35,7 +36,7 @@ fn origin_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl To
 
     let builder_struct_fields_default = named.iter().map(|field| {
         let field_ident = &field.ident;
-        quote!(#field_ident: std::option::Option::None)
+        quote!(#field_ident: None)
     });
     quote! {
         impl #origin_struct_ident {
@@ -54,8 +55,12 @@ fn builder_struct(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl
 
     let builder_struct_fields = named.iter().map(|field| {
         let field_ident = &field.ident;
-        let field_ty = &field.ty;
-        quote!(#field_ident: std::option::Option<#field_ty>)
+        let field_ty = if let Some(inner_ty) = ty_check_and_get_inner_ty(&field.ty, "Option") {
+            inner_ty
+        } else {
+            &field.ty
+        };
+        quote!(#field_ident: Option<#field_ty>)
     });
     quote! {
         pub struct #builder_struct_ident {
@@ -70,11 +75,20 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl T
 
     let builder_fields = named.iter().map(|field| {
         let field_ident = &field.ident;
-        quote!(#field_ident: self.#field_ident.clone().ok_or(concat!(stringify!(#field_ident), " has not been set yet"))?)
+        let field_ty = &field.ty;
+        if ty_check_and_get_inner_ty(field_ty, "Option").is_some() {
+            quote!(#field_ident: self.#field_ident.clone())
+        } else {
+            quote!(#field_ident: self.#field_ident.clone().ok_or(concat!(stringify!(#field_ident), " has not been set yet"))?)
+        }
     });
     let builder_setters = named.iter().map(|field| {
         let field_ident = &field.ident;
-        let field_ty = &field.ty;
+        let field_ty = if let Some(inner_ty) = ty_check_and_get_inner_ty(&field.ty, "Option") {
+            inner_ty
+        } else {
+            &field.ty
+        };
         quote! {
             pub fn #field_ident(&mut self, #field_ident: #field_ty) -> &mut Self {
                 self.#field_ident = Some(#field_ident);
@@ -94,4 +108,28 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl T
             #(#builder_setters)*
         }
     }
+}
+
+fn ty_check_and_get_inner_ty<'a>(ty: &'a Type, expected_ident: &str) -> Option<&'a Type> {
+    if let Type::Path(TypePath {
+        path: Path { segments, .. },
+        ..
+    }) = ty
+    {
+        if segments.len() != 1 {
+            return None;
+        }
+        if let PathSegment {
+            ident,
+            arguments: PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }),
+        } = &segments[0]
+        {
+            if ident == expected_ident {
+                if let Some(GenericArgument::Type(inner_ty)) = args.first() {
+                    return Some(inner_ty);
+                }
+            }
+        }
+    }
+    None
 }
