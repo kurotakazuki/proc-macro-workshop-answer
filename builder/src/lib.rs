@@ -1,12 +1,12 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, token::Comma, AngleBracketedGenericArguments, Data,
-    DataStruct, DeriveInput, Field, Fields, FieldsNamed, GenericArgument, Path, PathArguments,
-    PathSegment, Type, TypePath,
+    parse_macro_input, punctuated::Punctuated, token::Comma, AngleBracketedGenericArguments,
+    Attribute, Data, DataStruct, DeriveInput, Field, Fields, FieldsNamed, GenericArgument, Ident,
+    Lit, Meta, MetaNameValue, NestedMeta, Path, PathArguments, PathSegment, Type, TypePath,
 };
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -36,7 +36,12 @@ fn origin_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl To
 
     let builder_struct_fields_default = named.iter().map(|field| {
         let field_ident = &field.ident;
-        quote!(#field_ident: None)
+        let field_ty = &field.ty;
+        if ty_check_and_get_inner_ty(field_ty, "Vec").is_some() {
+            quote!(#field_ident: Some(vec!()))
+        } else {
+            quote!(#field_ident: None)
+        }
     });
     quote! {
         impl #origin_struct_ident {
@@ -83,23 +88,43 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl T
         }
     });
     let builder_setters = named.iter().map(|field| {
+        let field_attrs = &field.attrs;
         let field_ident = &field.ident;
         let field_ty = if let Some(inner_ty) = ty_check_and_get_inner_ty(&field.ty, "Option") {
             inner_ty
         } else {
             &field.ty
         };
-        quote! {
+        let setter = quote! {
             pub fn #field_ident(&mut self, #field_ident: #field_ty) -> &mut Self {
                 self.#field_ident = Some(#field_ident);
                 self
+            }
+        };
+
+        if field_attrs.is_empty() {
+            quote!(#setter)
+        } else {
+            // #[builder(each = "...")]
+            let vec_inner_ty =
+                ty_check_and_get_inner_ty(field_ty, "Vec").expect("expect type is Vec");
+            let each_ident = get_each_ident(field_attrs);
+            quote! {
+                fn #each_ident(&mut self, #each_ident: #vec_inner_ty) -> &mut Self {
+                    if let Some(ref mut v) = self.#field_ident {
+                        v.push(#each_ident);
+                    } else {
+                        self.#field_ident = Some(vec![#each_ident]);
+                    }
+                    self
+                }
             }
         }
     });
     quote! {
         impl #builder_struct_ident {
             pub fn build(&mut self) -> Result<#origin_struct_ident, Box<dyn std::error::Error>> {
-                std::result::Result::Ok(
+                Ok(
                     #origin_struct_ident {
                         #(#builder_fields),*
                     }
@@ -132,4 +157,31 @@ fn ty_check_and_get_inner_ty<'a>(ty: &'a Type, expected_ident: &str) -> Option<&
         }
     }
     None
+}
+
+fn get_each_ident(attrs: &Vec<Attribute>) -> Ident {
+    if attrs.len() != 1 {
+        unimplemented!();
+    }
+    if let Ok(Meta::List(list)) = attrs[0].parse_meta() {
+        if list.nested.len() != 1 {
+            unimplemented!();
+        }
+
+        if list.path.is_ident("builder") {
+            if let NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                path,
+                lit: Lit::Str(lit_str),
+                ..
+            })) = &list.nested[0]
+            {
+                if path.is_ident("each") {
+                    if let Ok(ident) = lit_str.parse() {
+                        return ident;
+                    }
+                }
+            }
+        }
+    }
+    unimplemented!()
 }
