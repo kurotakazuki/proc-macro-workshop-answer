@@ -74,7 +74,7 @@ fn builder_struct(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl
     }
 }
 
-fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl ToTokens {
+fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> proc_macro2::TokenStream {
     let origin_struct_ident = &input.ident;
     let builder_struct_ident = format_ident!("{}Builder", origin_struct_ident);
 
@@ -108,16 +108,18 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl T
             // #[builder(each = "...")]
             let vec_inner_ty =
                 ty_check_and_get_inner_ty(field_ty, "Vec").expect("expect type is Vec");
-            let each_ident = get_each_ident(field_attrs);
-            quote! {
-                fn #each_ident(&mut self, #each_ident: #vec_inner_ty) -> &mut Self {
-                    if let Some(ref mut v) = self.#field_ident {
-                        v.push(#each_ident);
-                    } else {
-                        self.#field_ident = Some(vec![#each_ident]);
+            match get_each_ident(field_attrs) {
+                Ok(each_ident) => quote! {
+                    fn #each_ident(&mut self, #each_ident: #vec_inner_ty) -> &mut Self {
+                        if let Some(ref mut v) = self.#field_ident {
+                            v.push(#each_ident);
+                        } else {
+                            self.#field_ident = Some(vec![#each_ident]);
+                        }
+                        self
                     }
-                    self
-                }
+                },
+                Err(e) => e,
             }
         }
     });
@@ -159,7 +161,7 @@ fn ty_check_and_get_inner_ty<'a>(ty: &'a Type, expected_ident: &str) -> Option<&
     None
 }
 
-fn get_each_ident(attrs: &Vec<Attribute>) -> Ident {
+fn get_each_ident(attrs: &Vec<Attribute>) -> Result<Ident, proc_macro2::TokenStream> {
     if attrs.len() != 1 {
         unimplemented!();
     }
@@ -177,8 +179,14 @@ fn get_each_ident(attrs: &Vec<Attribute>) -> Ident {
             {
                 if path.is_ident("each") {
                     if let Ok(ident) = lit_str.parse() {
-                        return ident;
+                        return Ok(ident);
                     }
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "expected `builder(each = \"...\")`",
+                    )
+                    .to_compile_error());
                 }
             }
         }
