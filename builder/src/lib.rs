@@ -38,9 +38,9 @@ fn origin_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl To
         let field_ident = &field.ident;
         let field_ty = &field.ty;
         if ty_check_and_get_inner_ty(field_ty, "Vec").is_some() {
-            quote!(#field_ident: Some(vec!()))
+            quote!(#field_ident: std::option::Option::Some(vec!()))
         } else {
-            quote!(#field_ident: None)
+            quote!(#field_ident: std::option::Option::None)
         }
     });
     quote! {
@@ -65,7 +65,7 @@ fn builder_struct(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> impl
         } else {
             &field.ty
         };
-        quote!(#field_ident: Option<#field_ty>)
+        quote!(#field_ident: std::option::Option<#field_ty>)
     });
     quote! {
         pub struct #builder_struct_ident {
@@ -97,7 +97,7 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> proc_m
         };
         let setter = quote! {
             pub fn #field_ident(&mut self, #field_ident: #field_ty) -> &mut Self {
-                self.#field_ident = Some(#field_ident);
+                self.#field_ident = std::option::Option::Some(#field_ident);
                 self
             }
         };
@@ -111,10 +111,10 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> proc_m
             match get_each_ident(field_attrs) {
                 Ok(each_ident) => quote! {
                     fn #each_ident(&mut self, #each_ident: #vec_inner_ty) -> &mut Self {
-                        if let Some(ref mut v) = self.#field_ident {
+                        if let std::option::Option::Some(ref mut v) = self.#field_ident {
                             v.push(#each_ident);
                         } else {
-                            self.#field_ident = Some(vec![#each_ident]);
+                            self.#field_ident = std::option::Option::Some(vec![#each_ident]);
                         }
                         self
                     }
@@ -125,7 +125,7 @@ fn builder_impl(input: &DeriveInput, named: &Punctuated<Field, Comma>) -> proc_m
     });
     quote! {
         impl #builder_struct_ident {
-            pub fn build(&mut self) -> Result<#origin_struct_ident, Box<dyn std::error::Error>> {
+            pub fn build(&mut self) -> std::result::Result<#origin_struct_ident, std::boxed::Box<dyn std::error::Error>> {
                 Ok(
                     #origin_struct_ident {
                         #(#builder_fields),*
